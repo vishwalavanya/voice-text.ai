@@ -51,8 +51,27 @@ class Settings(BaseSettings):
             return [str(v) for v in value]
         return ["*"]
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: object) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return ""
+
+        # Render / Supabase often provide postgres:// or postgresql:// URLs.
+        # This backend uses SQLAlchemy async engine, so we normalize to asyncpg.
+        if raw.startswith("postgres://"):
+            raw = "postgresql://" + raw[len("postgres://") :]
+
+        if raw.startswith("postgresql+psycopg2://"):
+            raw = "postgresql://" + raw[len("postgresql+psycopg2://") :]
+
+        if raw.startswith("postgresql://"):
+            raw = "postgresql+asyncpg://" + raw[len("postgresql://") :]
+
+        return raw
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return Settings()
-
