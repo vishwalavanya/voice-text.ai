@@ -91,7 +91,13 @@ class VoiceAgentOrchestrator:
         latency: LatencyTracker,
     ) -> dict[str, Any]:
 
-        state = await self.memory_store.get_session_state(session_id)
+        # ---------------------------------------------------
+        # INITIAL STATE
+        # ---------------------------------------------------
+
+        state = await self.memory_store.get_session_state(
+            session_id
+        )
 
         preferred_language = (
             state.get("language_preference")
@@ -99,7 +105,7 @@ class VoiceAgentOrchestrator:
             or "en"
         )
 
-        transcript_lower = transcript.lower()
+        transcript_lower = transcript.lower().strip()
 
         # ---------------------------------------------------
         # RESET BOOKING FLOW
@@ -109,36 +115,54 @@ class VoiceAgentOrchestrator:
 
             # English
             "book appointment",
+            "book a appointment",
             "new appointment",
             "schedule appointment",
-            "book a appointment",
+            "appointment booking",
 
             # Tamil
             "அப்பாயின்மென்ட்",
             "appointment புக்",
 
             # Hindi
-            "अपॉइंटमेंट बुक",
+            "अपॉइंटमेंट",
             "डॉक्टर अपॉइंटमेंट",
             "बुकिंग",
         ]
 
-        if any(
+        is_new_booking = any(
             phrase in transcript_lower
             for phrase in new_booking_phrases
-        ):
+        )
 
+        if is_new_booking:
+
+            # FULL RESET
             booking_state = {}
 
             await self.memory_store.update_state_fields(
                 session_id,
                 {
                     "booking_state": {},
+                    "current_intent": "book_appointment",
+                    "temporary_context": {},
                 },
             )
 
+            # FORCE LOCAL RESET
+            state = {}
+            booking_state = {}
+
         else:
-            booking_state = state.get("booking_state", {})
+
+            booking_state = state.get(
+                "booking_state",
+                {},
+            )
+
+        # ---------------------------------------------------
+        # SAVE LANGUAGE
+        # ---------------------------------------------------
 
         await self.memory_store.update_state_fields(
             session_id,
@@ -153,121 +177,66 @@ class VoiceAgentOrchestrator:
 
         doctor_keywords = {
 
-            # ---------------------------------------------------
-            # CARDIOLOGIST
-            # ---------------------------------------------------
-
+            # Cardiologist
             "cardiologist": "Cardiologist",
             "cardio": "Cardiologist",
             "heart": "Cardiologist",
             "heart doctor": "Cardiologist",
-
-            # Tamil
             "இதயம்": "Cardiologist",
-
-            # Hindi
             "दिल": "Cardiologist",
-            "हार्ट": "Cardiologist",
 
-            # ---------------------------------------------------
-            # DERMATOLOGIST
-            # ---------------------------------------------------
-
+            # Dermatologist
             "skin": "Dermatologist",
             "skin doctor": "Dermatologist",
             "dermatologist": "Dermatologist",
-
-            # Tamil
             "தோல்": "Dermatologist",
-
-            # Hindi
             "त्वचा": "Dermatologist",
 
-            # ---------------------------------------------------
-            # OPHTHALMOLOGIST
-            # ---------------------------------------------------
-
+            # Ophthalmologist
             "eye": "Ophthalmologist",
             "eye doctor": "Ophthalmologist",
-
-            # Tamil
             "கண்": "Ophthalmologist",
-
-            # Hindi
             "आंख": "Ophthalmologist",
 
-            # ---------------------------------------------------
-            # ORTHOPEDIC
-            # ---------------------------------------------------
-
+            # Orthopedic
             "ortho": "Orthopedic",
             "orthopedic": "Orthopedic",
             "bone": "Orthopedic",
-
-            # Tamil
             "எலும்பு": "Orthopedic",
-
-            # Hindi
             "हड्डी": "Orthopedic",
 
-            # ---------------------------------------------------
             # ENT
-            # ---------------------------------------------------
-
             "ent": "ENT Specialist",
             "ear": "ENT Specialist",
             "nose": "ENT Specialist",
             "throat": "ENT Specialist",
-
-            # Hindi
             "नाक": "ENT Specialist",
             "गला": "ENT Specialist",
 
-            # ---------------------------------------------------
-            # GYNECOLOGIST
-            # ---------------------------------------------------
-
+            # Gynecologist
             "gynecologist": "Gynecologist",
             "gyno": "Gynecologist",
             "pregnancy": "Gynecologist",
             "women": "Gynecologist",
-
-            # Tamil
             "பெண்கள்": "Gynecologist",
-
-            # Hindi
             "महिला": "Gynecologist",
-            "गर्भ": "Gynecologist",
 
-            # PEDIATRICIAN
-          
-
+            # Pediatrician
             "child": "Pediatrician",
             "children": "Pediatrician",
             "kids": "Pediatrician",
             "baby": "Pediatrician",
             "pediatrician": "Pediatrician",
-
-            # Tamil
             "குழந்தை": "Pediatrician",
-
-            # Hindi
             "बच्चा": "Pediatrician",
 
-            # GENERAL PHYSICIAN
-         
-
+            # General Physician
             "general": "General Physician",
             "fever": "General Physician",
             "cold": "General Physician",
             "cough": "General Physician",
-
-            # Tamil
             "காய்ச்சல்": "General Physician",
-
-            # Hindi
             "बुखार": "General Physician",
-            "खांसी": "General Physician",
         }
 
         detected_doctor = None
@@ -280,15 +249,11 @@ class VoiceAgentOrchestrator:
 
         if detected_doctor:
 
-            existing_doctor = booking_state.get(
-                "doctor_name"
-            )
+            booking_state["doctor_name"] = detected_doctor
 
-            if existing_doctor != detected_doctor:
-                booking_state["doctor_name"] = detected_doctor
-
-       
-        # SMART DATE / TIME EXTRACTION
+        # ---------------------------------------------------
+        # DATE EXTRACTION
+        # ---------------------------------------------------
 
         date_keywords = [
 
@@ -306,27 +271,6 @@ class VoiceAgentOrchestrator:
             "कल",
         ]
 
-        time_keywords = [
-
-            # English
-            "morning",
-            "afternoon",
-            "evening",
-            "night",
-
-            # Tamil
-            "காலை",
-            "மதியம்",
-            "சாயங்காலம்",
-            "இரவு",
-
-            # Hindi
-            "सुबह",
-            "दोपहर",
-            "शाम",
-            "रात",
-        ]
-
         parsed_datetime = dateparser.parse(
             transcript,
             languages=["en", "ta", "hi"],
@@ -337,7 +281,6 @@ class VoiceAgentOrchestrator:
 
         if parsed_datetime:
 
-            # ONLY DATE
             if any(
                 word in transcript_lower
                 for word in date_keywords
@@ -347,18 +290,41 @@ class VoiceAgentOrchestrator:
                     parsed_datetime.date().isoformat()
                 )
 
-            # ONLY TIME
-            if any(
-                word in transcript_lower
-                for word in time_keywords
-            ):
+        # ---------------------------------------------------
+        # TIME EXTRACTION
+        # ---------------------------------------------------
 
-                booking_state["appointment_time"] = (
-                    transcript_lower
-                )
+        time_keywords = {
 
+            # English
+            "morning": "morning",
+            "afternoon": "afternoon",
+            "evening": "evening",
+            "night": "night",
+
+            # Tamil
+            "காலை": "morning",
+            "மதியம்": "afternoon",
+            "சாயங்காலம்": "evening",
+            "இரவு": "night",
+
+            # Hindi
+            "सुबह": "morning",
+            "दोपहर": "afternoon",
+            "शाम": "evening",
+            "रात": "night",
+        }
+
+        for keyword, value in time_keywords.items():
+
+            if keyword in transcript_lower:
+
+                booking_state["appointment_time"] = value
+                break
+
+        # ---------------------------------------------------
         # BOOKING FLOW DETECTION
-     
+        # ---------------------------------------------------
 
         booking_keywords = [
 
@@ -368,7 +334,6 @@ class VoiceAgentOrchestrator:
             "doctor",
             "schedule",
             "consult",
-            "booking",
 
             # Tamil
             "அப்பாயின்மென்ட்",
@@ -378,7 +343,6 @@ class VoiceAgentOrchestrator:
             # Hindi
             "अपॉइंटमेंट",
             "डॉक्टर",
-            "बुकिंग",
             "परामर्श",
         ]
 
@@ -392,9 +356,9 @@ class VoiceAgentOrchestrator:
             or bool(booking_state)
         )
 
-        
+        # ---------------------------------------------------
         # SAVE BOOKING STATE
-      
+        # ---------------------------------------------------
 
         await self.memory_store.update_state_fields(
             session_id,
@@ -403,14 +367,13 @@ class VoiceAgentOrchestrator:
             },
         )
 
-        
+        # ---------------------------------------------------
         # STRICT SLOT FILLING
-       
+        # ---------------------------------------------------
+
         if is_booking_flow:
 
-           
             # ASK DOCTOR
-          
 
             if not booking_state.get("doctor_name"):
 
@@ -443,7 +406,7 @@ class VoiceAgentOrchestrator:
                 }
 
             # ASK DATE
-           
+
             if not booking_state.get("appointment_date"):
 
                 if preferred_language == "ta":
@@ -474,9 +437,7 @@ class VoiceAgentOrchestrator:
                     "intent": "collect_date",
                 }
 
-           
             # ASK TIME
-           
 
             if not booking_state.get("appointment_time"):
 
@@ -507,9 +468,9 @@ class VoiceAgentOrchestrator:
                     "intent": "collect_time",
                 }
 
-     
+        # ---------------------------------------------------
         # CONVERSATION HISTORY
-     
+        # ---------------------------------------------------
 
         history = (
             await self.memory_store.get_conversation_messages(
@@ -539,8 +500,9 @@ class VoiceAgentOrchestrator:
             }
         )
 
+        # ---------------------------------------------------
         # LLM CALL
-      
+        # ---------------------------------------------------
 
         llm_started = latency.start_stage()
 
@@ -581,9 +543,9 @@ class VoiceAgentOrchestrator:
 
         total_db_latency_ms = 0.0
 
-       
+        # ---------------------------------------------------
         # TOOL EXECUTION
-      
+        # ---------------------------------------------------
 
         if tool_calls:
 
@@ -684,9 +646,10 @@ class VoiceAgentOrchestrator:
                 "to continue your appointment booking."
             )
 
-        
+        # ---------------------------------------------------
         # SAVE CONVERSATION
-    
+        # ---------------------------------------------------
+
         await self.memory_store.add_conversation_message(
             session_id,
             "user",
