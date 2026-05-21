@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -17,6 +18,8 @@ from backend.tools.appointment_tools import (
     check_availability,
     reschedule_appointment,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class VoiceAgentOrchestrator:
@@ -141,7 +144,8 @@ Example response:
                 "appointment_time": parsed.get("appointment_time"),
             }
 
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed to extract booking fields | error=%s", str(exc))
 
             return {
                 "doctor_name": None,
@@ -198,8 +202,16 @@ Example response:
         latency: LatencyTracker,
     ) -> dict[str, Any]:
 
-        state = await self.memory_store.get_session_state(
-            session_id
+        # ============================================================
+        # LOAD EXISTING SESSION STATE
+        # ============================================================
+        
+        state = await self.memory_store.get_session_state(session_id)
+        
+        logger.info(
+            "Session state loaded | session=%s | has_booking_state=%s",
+            session_id,
+            "booking_state" in state
         )
 
         transcript_lower = transcript.lower().strip()
@@ -210,9 +222,9 @@ Example response:
             or "en"
         )
 
-        # ---------------------------------------------------
-        # RESET FLOW
-        # ---------------------------------------------------
+        # ============================================================
+        # RESET FLOW (NEW BOOKING TRIGGER)
+        # ============================================================
 
         new_booking_phrases = [
 
@@ -235,6 +247,10 @@ Example response:
         )
 
         if is_new_booking:
+            logger.info(
+                "New booking detected | session=%s | clearing previous state",
+                session_id
+            )
 
             await self.memory_store.clear_session(
                 session_id
@@ -248,18 +264,44 @@ Example response:
                 "booking_state",
                 {},
             )
+            
+            logger.debug(
+                "Continuing booking | session=%s | current_state=%s",
+                session_id,
+                {
+                    "doctor": booking_state.get("doctor_name"),
+                    "date": booking_state.get("appointment_date"),
+                    "time": booking_state.get("appointment_time"),
+                }
+            )
 
-        # ---------------------------------------------------
-        # AI EXTRACTION
-        # ---------------------------------------------------
+        # ============================================================
+        # AI EXTRACTION (LLM-based)
+        # ============================================================
 
         extracted = await self._extract_booking_fields(
             transcript
         )
+        
+        logger.debug(
+            "Extracted booking fields | session=%s | extracted=%s",
+            session_id,
+            {
+                "doctor": extracted.get("doctor_name"),
+                "date": extracted.get("appointment_date"),
+                "time": extracted.get("appointment_time"),
+            }
+        )
 
+        # Update booking state with extracted fields
         if extracted.get("doctor_name"):
 
             booking_state["doctor_name"] = (
+                extracted["doctor_name"]
+            )
+            logger.debug(
+                "Updated doctor | session=%s | doctor=%s",
+                session_id,
                 extracted["doctor_name"]
             )
 
@@ -268,16 +310,26 @@ Example response:
             booking_state["appointment_date"] = (
                 extracted["appointment_date"]
             )
+            logger.debug(
+                "Updated date | session=%s | date=%s",
+                session_id,
+                extracted["appointment_date"]
+            )
 
         if extracted.get("appointment_time"):
 
             booking_state["appointment_time"] = (
                 extracted["appointment_time"]
             )
+            logger.debug(
+                "Updated time | session=%s | time=%s",
+                session_id,
+                extracted["appointment_time"]
+            )
 
-        # ---------------------------------------------------
-        # SAVE STATE
-        # ---------------------------------------------------
+        # ============================================================
+        # SAVE STATE TO REDIS (PERSISTENCE)
+        # ============================================================
 
         await self.memory_store.update_state_fields(
             session_id,
@@ -287,12 +339,23 @@ Example response:
                 "current_intent": "book_appointment",
             },
         )
+        
+        logger.info(
+            "State saved | session=%s | booking_state=%s",
+            session_id,
+            {
+                "doctor": booking_state.get("doctor_name"),
+                "date": booking_state.get("appointment_date"),
+                "time": booking_state.get("appointment_time"),
+            }
+        )
 
-        # ---------------------------------------------------
-        # SLOT FILLING
-        # ---------------------------------------------------
+        # ============================================================
+        # SLOT FILLING (What's missing?)
+        # ============================================================
 
         if not booking_state.get("doctor_name"):
+            logger.info("Missing doctor | session=%s", session_id)
 
             if preferred_language == "ta":
 
@@ -320,6 +383,7 @@ Example response:
             }
 
         if not booking_state.get("appointment_date"):
+            logger.info("Missing date | session=%s", session_id)
 
             if preferred_language == "ta":
 
@@ -347,6 +411,7 @@ Example response:
             }
 
         if not booking_state.get("appointment_time"):
+            logger.info("Missing time | session=%s", session_id)
 
             if preferred_language == "ta":
 
@@ -373,9 +438,17 @@ Example response:
                 "tool_results": [],
             }
 
-        # ---------------------------------------------------
-        # CHECK AVAILABILITY
-        # ---------------------------------------------------
+        # ============================================================
+        # ALL FIELDS COLLECTED - CHECK AVAILABILITY
+        # ============================================================
+
+        logger.info(
+            "All fields collected | session=%s | doctor=%s | date=%s | time=%s",
+            session_id,
+            booking_state.get("doctor_name"),
+            booking_state.get("appointment_date"),
+            booking_state.get("appointment_time"),
+        )
 
         tool_args = {
             "intent": "book_appointment",
@@ -395,9 +468,15 @@ Example response:
             **tool_args,
         )
 
-        # ---------------------------------------------------
+        logger.info(
+            "Availability checked | session=%s | success=%s",
+            session_id,
+            availability_result.get("success")
+        )
+
+        # ============================================================
         # TOOL RESPONSE
-        # ---------------------------------------------------
+        # ============================================================
 
         tool_results = [
             {
@@ -406,9 +485,9 @@ Example response:
             }
         ]
 
-        # ---------------------------------------------------
-        # FINAL RESPONSE
-        # ---------------------------------------------------
+        # ============================================================
+        # FINAL RESPONSE FROM LLM
+        # ============================================================
 
         messages = [
             {
@@ -451,9 +530,15 @@ Example response:
             )
         )
 
-        # ---------------------------------------------------
-        # SAVE CONVERSATION
-        # ---------------------------------------------------
+        logger.debug(
+            "Final response generated | session=%s | length=%d",
+            session_id,
+            len(final_text)
+        )
+
+        # ============================================================
+        # SAVE CONVERSATION TO HISTORY
+        # ============================================================
 
         await self.memory_store.add_conversation_message(
             session_id,
@@ -465,6 +550,11 @@ Example response:
             session_id,
             "assistant",
             final_text,
+        )
+
+        logger.info(
+            "Turn completed | session=%s | intent=book_appointment",
+            session_id
         )
 
         return {

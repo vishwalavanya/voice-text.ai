@@ -25,7 +25,26 @@ router = APIRouter()
 @router.websocket("/ws/audio")
 async def audio_socket(websocket: WebSocket) -> None:
     await websocket.accept()
-    session_id = websocket.query_params.get("session_id") or str(uuid4())
+    
+    # ============================================================
+    # CRITICAL FIX: Session ID persistence
+    # ============================================================
+    # Get session_id from query params (frontend MUST send it)
+    # Only generate new one if absolutely missing
+    session_id = websocket.query_params.get("session_id")
+    
+    if not session_id or not session_id.strip():
+        # Generate only if client truly sends nothing
+        session_id = str(uuid4())
+        logger.warning(
+            "No session_id from frontend. Generated new: %s | "
+            "Frontend should send session_id in WebSocket URL",
+            session_id
+        )
+    
+    # Inform frontend of the session_id being used
+    # Frontend must store this in localStorage
+    logger.info("WebSocket connected | session_id=%s", session_id)
 
     memory_store: RedisMemoryStore = websocket.app.state.memory_store
     orchestrator: VoiceAgentOrchestrator = websocket.app.state.orchestrator
@@ -72,6 +91,9 @@ async def audio_socket(websocket: WebSocket) -> None:
                         }
                     )
 
+                    # ============================================================
+                    # Process with AI orchestrator (preserves state)
+                    # ============================================================
                     agent_result = await orchestrator.handle_turn(
                         session_id=session_id,
                         transcript=transcript,
@@ -118,11 +140,15 @@ async def audio_socket(websocket: WebSocket) -> None:
     await stt_service.start(transcript_callback=on_transcript, error_callback=on_stt_error)
     worker_task = asyncio.create_task(process_transcripts())
 
+    # ============================================================
+    # Send session_started with session_id for frontend to store
+    # ============================================================
     await websocket.send_json(
         {
             "type": "session_started",
             "session_id": session_id,
             "message": "Realtime voice session started.",
+            "instruction": "Store session_id in localStorage and pass in next connection",
         }
     )
 
