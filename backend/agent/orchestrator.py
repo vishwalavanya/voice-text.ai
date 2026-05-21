@@ -135,11 +135,9 @@ class VoiceAgentOrchestrator:
             for phrase in new_booking_phrases
         )
 
+        # CRITICAL FIX: Reset booking_state ONLY when new booking is detected
         if is_new_booking:
-
-            # FULL RESET
             booking_state = {}
-
             await self.memory_store.update_state_fields(
                 session_id,
                 {
@@ -148,13 +146,8 @@ class VoiceAgentOrchestrator:
                     "temporary_context": {},
                 },
             )
-
-            # FORCE LOCAL RESET
-            state = {}
-            booking_state = {}
-
         else:
-
+            # Load existing booking state if NOT a new booking
             booking_state = state.get(
                 "booking_state",
                 {},
@@ -241,14 +234,15 @@ class VoiceAgentOrchestrator:
 
         detected_doctor = None
 
+        # CRITICAL FIX: Check for doctor keywords in current transcript
         for keyword, doctor in doctor_keywords.items():
-
             if keyword in transcript_lower:
                 detected_doctor = doctor
                 break
 
+        # CRITICAL FIX: Only set doctor_name if detected in CURRENT transcript
+        # Do NOT carry over from previous state unless explicitly in new booking flow
         if detected_doctor:
-
             booking_state["doctor_name"] = detected_doctor
 
         # ---------------------------------------------------
@@ -373,7 +367,7 @@ class VoiceAgentOrchestrator:
 
         if is_booking_flow:
 
-            # ASK DOCTOR
+            # ASK DOCTOR (FIRST PRIORITY - ALWAYS ASK IF MISSING)
 
             if not booking_state.get("doctor_name"):
 
@@ -405,7 +399,7 @@ class VoiceAgentOrchestrator:
                     "intent": "collect_doctor",
                 }
 
-            # ASK DATE
+            # ASK DATE (SECOND PRIORITY)
 
             if not booking_state.get("appointment_date"):
 
@@ -437,7 +431,7 @@ class VoiceAgentOrchestrator:
                     "intent": "collect_date",
                 }
 
-            # ASK TIME
+            # ASK TIME (THIRD PRIORITY)
 
             if not booking_state.get("appointment_time"):
 
