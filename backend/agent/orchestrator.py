@@ -174,78 +174,161 @@ class VoiceAgentOrchestrator:
         )
 
         # ---------------------------------------------------
-        # DOCTOR DETECTION
+        # MULTILINGUAL DOCTOR KEYWORDS
         # ---------------------------------------------------
 
         doctor_keywords = {
 
-            # Cardiologist
+            # ---------------------------------------------------
+            # CARDIOLOGIST
+            # ---------------------------------------------------
+
             "cardiologist": "Cardiologist",
-            "cardio": "Cardiologist",
             "heart": "Cardiologist",
             "heart doctor": "Cardiologist",
+
+            # Tamil
             "இதயம்": "Cardiologist",
+            "இதய": "Cardiologist",
+
+            # Hindi
             "दिल": "Cardiologist",
 
-            # Dermatologist
+            # ---------------------------------------------------
+            # DERMATOLOGIST
+            # ---------------------------------------------------
+
             "skin": "Dermatologist",
             "skin doctor": "Dermatologist",
             "dermatologist": "Dermatologist",
+
+            # Tamil
             "தோல்": "Dermatologist",
+
+            # Hindi
             "त्वचा": "Dermatologist",
 
-            # Ophthalmologist
+            # ---------------------------------------------------
+            # EYE
+            # ---------------------------------------------------
+
             "eye": "Ophthalmologist",
             "eye doctor": "Ophthalmologist",
+
+            # Tamil
             "கண்": "Ophthalmologist",
+            "கண்ணு": "Ophthalmologist",
+
+            # Hindi
             "आंख": "Ophthalmologist",
 
-            # Orthopedic
+            # ---------------------------------------------------
+            # ORTHOPEDIC
+            # ---------------------------------------------------
+
+            "bone": "Orthopedic",
             "ortho": "Orthopedic",
             "orthopedic": "Orthopedic",
-            "bone": "Orthopedic",
+
+            # Tamil
             "எலும்பு": "Orthopedic",
+            "மூட்டு": "Orthopedic",
+
+            # Hindi
             "हड्डी": "Orthopedic",
 
+            # ---------------------------------------------------
             # ENT
+            # ---------------------------------------------------
+
             "ent": "ENT Specialist",
             "ear": "ENT Specialist",
             "nose": "ENT Specialist",
             "throat": "ENT Specialist",
+
+            # Tamil
+            "காது": "ENT Specialist",
+            "மூக்கு": "ENT Specialist",
+            "தொண்டை": "ENT Specialist",
+
+            # Hindi
             "नाक": "ENT Specialist",
             "गला": "ENT Specialist",
 
-            # Gynecologist
+            # ---------------------------------------------------
+            # GYNECOLOGIST
+            # ---------------------------------------------------
+
             "gynecologist": "Gynecologist",
-            "gyno": "Gynecologist",
             "pregnancy": "Gynecologist",
             "women": "Gynecologist",
+
+            # Tamil
             "பெண்கள்": "Gynecologist",
+            "கர்ப்பம்": "Gynecologist",
+
+            # Hindi
             "महिला": "Gynecologist",
 
-            # Pediatrician
+            # ---------------------------------------------------
+            # PEDIATRICIAN
+            # ---------------------------------------------------
+
             "child": "Pediatrician",
             "children": "Pediatrician",
-            "kids": "Pediatrician",
             "baby": "Pediatrician",
-            "pediatrician": "Pediatrician",
+
+            # Tamil
             "குழந்தை": "Pediatrician",
+
+            # Hindi
             "बच्चा": "Pediatrician",
 
-            # General Physician
+            # ---------------------------------------------------
+            # GENERAL PHYSICIAN
+            # ---------------------------------------------------
+
             "general": "General Physician",
             "fever": "General Physician",
             "cold": "General Physician",
             "cough": "General Physician",
+
+            # Tamil
             "காய்ச்சல்": "General Physician",
+            "சளி": "General Physician",
+
+            # Hindi
             "बुखार": "General Physician",
         }
 
+        # ---------------------------------------------------
+        # SMART MULTILINGUAL DOCTOR DETECTION
+        # ---------------------------------------------------
+
         detected_doctor = None
+
+        normalized_text = (
+            transcript_lower
+            .replace(",", " ")
+            .replace(".", " ")
+            .replace("?", " ")
+            .replace("!", " ")
+            .strip()
+        )
+
+        words = normalized_text.split()
 
         for keyword, doctor in doctor_keywords.items():
 
-            if keyword in transcript_lower:
+            keyword_normalized = keyword.lower().strip()
+
+            # Exact phrase match
+            if keyword_normalized in normalized_text:
+                detected_doctor = doctor
+                break
+
+            # Word-level match
+            if keyword_normalized in words:
                 detected_doctor = doctor
                 break
 
