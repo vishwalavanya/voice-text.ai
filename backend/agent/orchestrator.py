@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
-import dateparser
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.latency.logger import LatencyTracker
@@ -20,21 +20,134 @@ from backend.tools.appointment_tools import (
 
 
 class VoiceAgentOrchestrator:
-    SYSTEM_PROMPT = (
-        "You are a multilingual clinical appointment booking voice assistant.\n"
-        "Supported languages: English, Tamil, Hindi.\n"
-        "Always ask doctor specialization first.\n"
-        "Then ask appointment date.\n"
-        "Then ask appointment time.\n"
-        "Never skip required booking fields.\n"
-        "Never repeat already answered questions.\n"
-        "Use appointment tools whenever required.\n"
-        "Respond naturally in user's preferred language.\n"
-    )
 
-    def __init__(self, memory_store: RedisMemoryStore) -> None:
+    SYSTEM_PROMPT = """
+You are a multilingual clinical voice AI assistant.
+
+Supported languages:
+- English
+- Tamil
+- Hindi
+
+Your responsibilities:
+1. Book appointments
+2. Cancel appointments
+3. Reschedule appointments
+4. Answer clinic queries
+
+BOOKING RULES:
+- ALWAYS collect:
+    1. doctor specialization
+    2. appointment date
+    3. appointment time
+- NEVER skip fields
+- NEVER ask already answered fields
+- NEVER repeat same question unnecessarily
+- Understand mixed language input
+- Understand natural speech
+
+Examples:
+- "tomorrow night eye doctor"
+- "இரவு cardiologist"
+- "कल सुबह skin doctor"
+
+Extract intelligently from user sentences.
+"""
+
+    EXTRACTION_PROMPT = """
+Extract appointment booking fields from the user message.
+
+Return ONLY valid JSON.
+
+Fields:
+- doctor_name
+- appointment_date
+- appointment_time
+
+Rules:
+- If not found return null
+- Understand English Tamil Hindi mixed language
+- Convert doctor meaning intelligently
+
+Doctor mapping:
+eye -> Ophthalmologist
+skin -> Dermatologist
+heart -> Cardiologist
+bone -> Orthopedic
+ear/nose/throat -> ENT Specialist
+women/pregnancy -> Gynecologist
+child/baby -> Pediatrician
+
+Example response:
+{
+  "doctor_name": "Cardiologist",
+  "appointment_date": "tomorrow",
+  "appointment_time": "evening"
+}
+"""
+
+    def __init__(
+        self,
+        memory_store: RedisMemoryStore,
+    ) -> None:
+
         self.memory_store = memory_store
         self.llm_service = SambaNovaService()
+
+    async def _extract_booking_fields(
+        self,
+        transcript: str,
+    ) -> dict[str, Any]:
+
+        messages = [
+            {
+                "role": "system",
+                "content": self.EXTRACTION_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": transcript,
+            },
+        ]
+
+        completion = await self.llm_service.create_chat_completion(
+            messages=messages,
+            tools=None,
+            temperature=0.0,
+            max_tokens=200,
+        )
+
+        message = self.llm_service.extract_assistant_message(
+            completion
+        )
+
+        content = self.llm_service.extract_content(
+            message
+        )
+
+        try:
+
+            cleaned = re.sub(
+                r"```json|```",
+                "",
+                content,
+            ).strip()
+
+            parsed = json.loads(cleaned)
+
+            return {
+                "doctor_name": parsed.get("doctor_name"),
+                "appointment_date": parsed.get("appointment_date"),
+                "appointment_time": parsed.get("appointment_time"),
+            }
+
+        except Exception:
+
+            return {
+                "doctor_name": None,
+                "appointment_date": None,
+                "appointment_time": None,
+            }
 
     async def _execute_tool(
         self,
@@ -44,42 +157,36 @@ class VoiceAgentOrchestrator:
     ) -> dict[str, Any]:
 
         if tool_name == "check_availability":
-            return await check_availability(db=db, **arguments)
+
+            return await check_availability(
+                db=db,
+                **arguments,
+            )
 
         if tool_name == "book_appointment":
-            return await book_appointment(db=db, **arguments)
+
+            return await book_appointment(
+                db=db,
+                **arguments,
+            )
 
         if tool_name == "cancel_appointment":
-            return await cancel_appointment(db=db, **arguments)
+
+            return await cancel_appointment(
+                db=db,
+                **arguments,
+            )
 
         if tool_name == "reschedule_appointment":
-            return await reschedule_appointment(db=db, **arguments)
+
+            return await reschedule_appointment(
+                db=db,
+                **arguments,
+            )
 
         return {
             "success": False,
-            "message": f"Unknown tool: {tool_name}",
-        }
-
-    @staticmethod
-    def _tool_calls_to_message(
-        tool_calls: list[dict[str, str]],
-        content: str,
-    ) -> dict[str, Any]:
-
-        return {
-            "role": "assistant",
-            "content": content or "",
-            "tool_calls": [
-                {
-                    "id": item["id"],
-                    "type": "function",
-                    "function": {
-                        "name": item["name"],
-                        "arguments": item["arguments"],
-                    },
-                }
-                for item in tool_calls
-            ],
+            "message": f"Unknown tool {tool_name}",
         }
 
     async def handle_turn(
@@ -91,13 +198,11 @@ class VoiceAgentOrchestrator:
         latency: LatencyTracker,
     ) -> dict[str, Any]:
 
-        # ---------------------------------------------------
-        # INITIAL STATE
-        # ---------------------------------------------------
-
         state = await self.memory_store.get_session_state(
             session_id
         )
+
+        transcript_lower = transcript.lower().strip()
 
         preferred_language = (
             state.get("language_preference")
@@ -105,10 +210,8 @@ class VoiceAgentOrchestrator:
             or "en"
         )
 
-        transcript_lower = transcript.lower().strip()
-
         # ---------------------------------------------------
-        # NEW BOOKING RESET
+        # RESET FLOW
         # ---------------------------------------------------
 
         new_booking_phrases = [
@@ -116,17 +219,14 @@ class VoiceAgentOrchestrator:
             # English
             "book appointment",
             "book a appointment",
-            "new appointment",
             "schedule appointment",
-            "appointment booking",
+            "new appointment",
 
             # Tamil
             "அப்பாயின்மென்ட் புக்",
-            "புதிய அப்பாயின்மென்ட்",
 
             # Hindi
             "अपॉइंटमेंट बुक",
-            "नई अपॉइंटमेंट",
         ]
 
         is_new_booking = any(
@@ -136,24 +236,11 @@ class VoiceAgentOrchestrator:
 
         if is_new_booking:
 
-            # FULL SESSION RESET
             await self.memory_store.clear_session(
                 session_id
             )
 
             booking_state = {}
-
-            state = {}
-
-            await self.memory_store.update_state_fields(
-                session_id,
-                {
-                    "booking_state": {},
-                    "current_intent": "book_appointment",
-                    "temporary_context": {},
-                    "language_preference": preferred_language,
-                },
-            )
 
         else:
 
@@ -163,573 +250,206 @@ class VoiceAgentOrchestrator:
             )
 
         # ---------------------------------------------------
-        # SAVE LANGUAGE
+        # AI EXTRACTION
         # ---------------------------------------------------
 
-        await self.memory_store.update_state_fields(
-            session_id,
-            {
-                "language_preference": preferred_language,
-            },
+        extracted = await self._extract_booking_fields(
+            transcript
         )
 
-        # ---------------------------------------------------
-        # MULTILINGUAL DOCTOR KEYWORDS
-        # ---------------------------------------------------
+        if extracted.get("doctor_name"):
 
-        doctor_keywords = {
-
-            # ---------------------------------------------------
-            # CARDIOLOGIST
-            # ---------------------------------------------------
-
-            "cardiologist": "Cardiologist",
-            "heart": "Cardiologist",
-            "heart doctor": "Cardiologist",
-
-            # Tamil
-            "இதயம்": "Cardiologist",
-            "இதய": "Cardiologist",
-
-            # Hindi
-            "दिल": "Cardiologist",
-
-            # ---------------------------------------------------
-            # DERMATOLOGIST
-            # ---------------------------------------------------
-
-            "skin": "Dermatologist",
-            "skin doctor": "Dermatologist",
-            "dermatologist": "Dermatologist",
-
-            # Tamil
-            "தோல்": "Dermatologist",
-
-            # Hindi
-            "त्वचा": "Dermatologist",
-
-            # ---------------------------------------------------
-            # EYE
-            # ---------------------------------------------------
-
-            "eye": "Ophthalmologist",
-            "eye doctor": "Ophthalmologist",
-
-            # Tamil
-            "கண்": "Ophthalmologist",
-            "கண்ணு": "Ophthalmologist",
-
-            # Hindi
-            "आंख": "Ophthalmologist",
-
-            # ---------------------------------------------------
-            # ORTHOPEDIC
-            # ---------------------------------------------------
-
-            "bone": "Orthopedic",
-            "ortho": "Orthopedic",
-            "orthopedic": "Orthopedic",
-
-            # Tamil
-            "எலும்பு": "Orthopedic",
-            "மூட்டு": "Orthopedic",
-
-            # Hindi
-            "हड्डी": "Orthopedic",
-
-            # ---------------------------------------------------
-            # ENT
-            # ---------------------------------------------------
-
-            "ent": "ENT Specialist",
-            "ear": "ENT Specialist",
-            "nose": "ENT Specialist",
-            "throat": "ENT Specialist",
-
-            # Tamil
-            "காது": "ENT Specialist",
-            "மூக்கு": "ENT Specialist",
-            "தொண்டை": "ENT Specialist",
-
-            # Hindi
-            "नाक": "ENT Specialist",
-            "गला": "ENT Specialist",
-
-            # ---------------------------------------------------
-            # GYNECOLOGIST
-            # ---------------------------------------------------
-
-            "gynecologist": "Gynecologist",
-            "pregnancy": "Gynecologist",
-            "women": "Gynecologist",
-
-            # Tamil
-            "பெண்கள்": "Gynecologist",
-            "கர்ப்பம்": "Gynecologist",
-
-            # Hindi
-            "महिला": "Gynecologist",
-
-            # ---------------------------------------------------
-            # PEDIATRICIAN
-            # ---------------------------------------------------
-
-            "child": "Pediatrician",
-            "children": "Pediatrician",
-            "baby": "Pediatrician",
-
-            # Tamil
-            "குழந்தை": "Pediatrician",
-
-            # Hindi
-            "बच्चा": "Pediatrician",
-
-            # ---------------------------------------------------
-            # GENERAL PHYSICIAN
-            # ---------------------------------------------------
-
-            "general": "General Physician",
-            "fever": "General Physician",
-            "cold": "General Physician",
-            "cough": "General Physician",
-
-            # Tamil
-            "காய்ச்சல்": "General Physician",
-            "சளி": "General Physician",
-
-            # Hindi
-            "बुखार": "General Physician",
-        }
-
-        # ---------------------------------------------------
-        # SMART MULTILINGUAL DOCTOR DETECTION
-        # ---------------------------------------------------
-
-        detected_doctor = None
-
-        normalized_text = (
-            transcript_lower
-            .replace(",", " ")
-            .replace(".", " ")
-            .replace("?", " ")
-            .replace("!", " ")
-            .strip()
-        )
-
-        words = normalized_text.split()
-
-        for keyword, doctor in doctor_keywords.items():
-
-            keyword_normalized = keyword.lower().strip()
-
-            # Exact phrase match
-            if keyword_normalized in normalized_text:
-                detected_doctor = doctor
-                break
-
-            # Word-level match
-            if keyword_normalized in words:
-                detected_doctor = doctor
-                break
-
-        if detected_doctor:
-
-            booking_state["doctor_name"] = detected_doctor
-
-        # ---------------------------------------------------
-        # DATE EXTRACTION
-        # ---------------------------------------------------
-
-        date_keywords = [
-
-            # English
-            "today",
-            "tomorrow",
-            "day after tomorrow",
-
-            # Tamil
-            "இன்று",
-            "நாளை",
-
-            # Hindi
-            "आज",
-            "कल",
-        ]
-
-        parsed_datetime = dateparser.parse(
-            transcript,
-            languages=["en", "ta", "hi"],
-            settings={
-                "PREFER_DATES_FROM": "future",
-            },
-        )
-
-        if parsed_datetime:
-
-            if any(
-                word in transcript_lower
-                for word in date_keywords
-            ):
-
-                booking_state["appointment_date"] = (
-                    parsed_datetime.date().isoformat()
-                )
-
-        # ---------------------------------------------------
-        # TIME EXTRACTION
-        # ---------------------------------------------------
-
-        time_keywords = {
-
-            # English
-            "morning": "morning",
-            "afternoon": "afternoon",
-            "evening": "evening",
-            "night": "night",
-
-            # Tamil
-            "காலை": "morning",
-            "மதியம்": "afternoon",
-            "சாயங்காலம்": "evening",
-            "இரவு": "night",
-
-            # Hindi
-            "सुबह": "morning",
-            "दोपहर": "afternoon",
-            "शाम": "evening",
-            "रात": "night",
-        }
-
-        for keyword, value in time_keywords.items():
-
-            if keyword in transcript_lower:
-
-                booking_state["appointment_time"] = value
-                break
-
-        # ---------------------------------------------------
-        # BOOKING FLOW DETECTION
-        # ---------------------------------------------------
-
-        booking_keywords = [
-
-            # English
-            "book",
-            "appointment",
-            "doctor",
-            "schedule",
-            "consult",
-
-            # Tamil
-            "அப்பாயின்மென்ட்",
-            "டாக்டர்",
-            "மருத்துவர்",
-
-            # Hindi
-            "अपॉइंटमेंट",
-            "डॉक्टर",
-            "परामर्श",
-        ]
-
-        is_booking_flow = (
-            any(
-                word in transcript_lower
-                for word in booking_keywords
+            booking_state["doctor_name"] = (
+                extracted["doctor_name"]
             )
-            or state.get("current_intent")
-            == "book_appointment"
-            or bool(booking_state)
-        )
+
+        if extracted.get("appointment_date"):
+
+            booking_state["appointment_date"] = (
+                extracted["appointment_date"]
+            )
+
+        if extracted.get("appointment_time"):
+
+            booking_state["appointment_time"] = (
+                extracted["appointment_time"]
+            )
 
         # ---------------------------------------------------
-        # SAVE BOOKING STATE
+        # SAVE STATE
         # ---------------------------------------------------
 
         await self.memory_store.update_state_fields(
             session_id,
             {
                 "booking_state": booking_state,
+                "language_preference": preferred_language,
+                "current_intent": "book_appointment",
             },
         )
 
         # ---------------------------------------------------
-        # STRICT SLOT FILLING
+        # SLOT FILLING
         # ---------------------------------------------------
 
-        if is_booking_flow:
+        if not booking_state.get("doctor_name"):
 
-            # ASK DOCTOR
+            if preferred_language == "ta":
 
-            if not booking_state.get("doctor_name"):
+                response = (
+                    "எந்த doctor அல்லது specialization வேண்டும்?"
+                )
 
-                if preferred_language == "ta":
+            elif preferred_language == "hi":
 
-                    question = (
-                        "எந்த doctor அல்லது "
-                        "specialization வேண்டும்?"
-                    )
+                response = (
+                    "आप किस प्रकार के डॉक्टर से परामर्श करना चाहते हैं?"
+                )
 
-                elif preferred_language == "hi":
+            else:
 
-                    question = (
-                        "आप किस प्रकार के डॉक्टर "
-                        "से परामर्श करना चाहते हैं?"
-                    )
+                response = (
+                    "Which type of doctor would you like to consult?"
+                )
 
-                else:
+            return {
+                "response_text": response,
+                "language": preferred_language,
+                "intent": "collect_doctor",
+                "tool_results": [],
+            }
 
-                    question = (
-                        "Which type of doctor "
-                        "would you like to consult?"
-                    )
+        if not booking_state.get("appointment_date"):
 
-                return {
-                    "response_text": question,
-                    "language": preferred_language,
-                    "tool_results": [],
-                    "intent": "collect_doctor",
-                }
+            if preferred_language == "ta":
 
-            # ASK DATE
+                response = (
+                    "எந்த தேதிக்கு appointment வேண்டும்?"
+                )
 
-            if not booking_state.get("appointment_date"):
+            elif preferred_language == "hi":
 
-                if preferred_language == "ta":
+                response = (
+                    "आप किस तारीख के लिए appointment चाहते हैं?"
+                )
 
-                    question = (
-                        "எந்த தேதிக்கு "
-                        "appointment வேண்டும்?"
-                    )
+            else:
 
-                elif preferred_language == "hi":
+                response = (
+                    "Which date would you prefer for the appointment?"
+                )
 
-                    question = (
-                        "आप किस तारीख के लिए "
-                        "appointment चाहते हैं?"
-                    )
+            return {
+                "response_text": response,
+                "language": preferred_language,
+                "intent": "collect_date",
+                "tool_results": [],
+            }
 
-                else:
+        if not booking_state.get("appointment_time"):
 
-                    question = (
-                        "Which date would you prefer "
-                        "for the appointment?"
-                    )
+            if preferred_language == "ta":
 
-                return {
-                    "response_text": question,
-                    "language": preferred_language,
-                    "tool_results": [],
-                    "intent": "collect_date",
-                }
+                response = (
+                    "உங்களுக்கு preferred time ஏதாவது இருக்கிறதா?"
+                )
 
-            # ASK TIME
+            elif preferred_language == "hi":
 
-            if not booking_state.get("appointment_time"):
+                response = (
+                    "क्या आपको कोई preferred time चाहिए?"
+                )
 
-                if preferred_language == "ta":
+            else:
 
-                    question = (
-                        "உங்களுக்கு preferred time "
-                        "ஏதாவது இருக்கிறதா?"
-                    )
+                response = (
+                    "What time would you prefer?"
+                )
 
-                elif preferred_language == "hi":
-
-                    question = (
-                        "क्या आपको कोई preferred "
-                        "time चाहिए?"
-                    )
-
-                else:
-
-                    question = (
-                        "What time would you prefer?"
-                    )
-
-                return {
-                    "response_text": question,
-                    "language": preferred_language,
-                    "tool_results": [],
-                    "intent": "collect_time",
-                }
+            return {
+                "response_text": response,
+                "language": preferred_language,
+                "intent": "collect_time",
+                "tool_results": [],
+            }
 
         # ---------------------------------------------------
-        # CONVERSATION HISTORY
+        # CHECK AVAILABILITY
         # ---------------------------------------------------
 
-        history = (
-            await self.memory_store.get_conversation_messages(
-                session_id
-            )
+        tool_args = {
+            "intent": "book_appointment",
+            "doctor_specialization": booking_state.get(
+                "doctor_name"
+            ),
+            "preferred_date": booking_state.get(
+                "appointment_date"
+            ),
+            "preferred_time": booking_state.get(
+                "appointment_time"
+            ),
+        }
+
+        availability_result = await check_availability(
+            db=db,
+            **tool_args,
         )
 
-        messages: list[dict[str, Any]] = [
+        # ---------------------------------------------------
+        # TOOL RESPONSE
+        # ---------------------------------------------------
+
+        tool_results = [
+            {
+                "tool_name": "check_availability",
+                "result": availability_result,
+            }
+        ]
+
+        # ---------------------------------------------------
+        # FINAL RESPONSE
+        # ---------------------------------------------------
+
+        messages = [
             {
                 "role": "system",
                 "content": (
                     f"{self.SYSTEM_PROMPT}\n"
                     f"Preferred language: "
-                    f"{get_language_name(preferred_language)}.\n"
-                    f"Booking state: "
-                    f"{json.dumps(booking_state)}"
+                    f"{get_language_name(preferred_language)}"
                 ),
-            }
-        ]
-
-        messages.extend(history)
-
-        messages.append(
+            },
             {
                 "role": "user",
                 "content": transcript,
-            }
-        )
+            },
+            {
+                "role": "tool",
+                "content": json.dumps(
+                    availability_result,
+                    ensure_ascii=False,
+                ),
+            },
+        ]
 
-        # ---------------------------------------------------
-        # LLM CALL
-        # ---------------------------------------------------
-
-        llm_started = latency.start_stage()
-
-        first_completion = (
-            await self.llm_service.create_chat_completion(
-                messages=messages,
-                tools=TOOL_SCHEMAS,
-                tool_choice="auto",
-            )
-        )
-
-        first_llm_ms = latency.end_stage(
-            "llm_initial_latency",
-            llm_started,
+        completion = await self.llm_service.create_chat_completion(
+            messages=messages,
+            tools=None,
+            temperature=0.2,
+            max_tokens=300,
         )
 
         assistant_message = (
             self.llm_service.extract_assistant_message(
-                first_completion
+                completion
             )
         )
 
-        assistant_content = (
+        final_text = (
             self.llm_service.extract_content(
                 assistant_message
             )
         )
-
-        tool_calls = (
-            self.llm_service.extract_tool_calls(
-                assistant_message
-            )
-        )
-
-        tool_results: list[dict[str, Any]] = []
-
-        current_intent = "general_query"
-
-        total_db_latency_ms = 0.0
-
-        # ---------------------------------------------------
-        # TOOL EXECUTION
-        # ---------------------------------------------------
-
-        if tool_calls:
-
-            current_intent = tool_calls[0]["name"]
-
-            messages.append(
-                self._tool_calls_to_message(
-                    tool_calls,
-                    assistant_content,
-                )
-            )
-
-            for call in tool_calls:
-
-                try:
-                    parsed_args = json.loads(
-                        call["arguments"] or "{}"
-                    )
-
-                except json.JSONDecodeError:
-                    parsed_args = {}
-
-                db_started = latency.start_stage()
-
-                tool_result = await self._execute_tool(
-                    db=db,
-                    tool_name=call["name"],
-                    arguments=parsed_args,
-                )
-
-                total_db_latency_ms += latency.end_stage(
-                    "db_call_latency",
-                    db_started,
-                )
-
-                tool_results.append(
-                    {
-                        "tool_name": call["name"],
-                        "tool_call_id": call["id"],
-                        "result": tool_result,
-                    }
-                )
-
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": call["id"],
-                        "content": json.dumps(
-                            tool_result,
-                            ensure_ascii=False,
-                        ),
-                    }
-                )
-
-            llm_followup_started = latency.start_stage()
-
-            follow_up = (
-                await self.llm_service.create_chat_completion(
-                    messages=messages,
-                    tools=None,
-                )
-            )
-
-            followup_ms = latency.end_stage(
-                "llm_followup_latency",
-                llm_followup_started,
-            )
-
-            latency.stages_ms["llm_latency"] = round(
-                first_llm_ms + followup_ms,
-                2,
-            )
-
-            final_message = (
-                self.llm_service.extract_assistant_message(
-                    follow_up
-                )
-            )
-
-            final_text = (
-                self.llm_service.extract_content(
-                    final_message
-                )
-            )
-
-        else:
-
-            latency.stages_ms["llm_latency"] = (
-                first_llm_ms
-            )
-
-            final_text = assistant_content
-
-        if not final_text:
-
-            final_text = (
-                "I need a few more details "
-                "to continue your appointment booking."
-            )
 
         # ---------------------------------------------------
         # SAVE CONVERSATION
@@ -747,26 +467,9 @@ class VoiceAgentOrchestrator:
             final_text,
         )
 
-        await self.memory_store.update_state_fields(
-            session_id,
-            {
-                "current_intent": current_intent,
-                "booking_state": booking_state,
-                "temporary_context": {
-                    "tool_results": tool_results[-2:],
-                    "booking_state": booking_state,
-                },
-            },
-        )
-
-        latency.stages_ms["db_latency"] = round(
-            total_db_latency_ms,
-            2,
-        )
-
         return {
             "response_text": final_text,
             "language": preferred_language,
+            "intent": "book_appointment",
             "tool_results": tool_results,
-            "intent": current_intent,
         }
