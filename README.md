@@ -1,271 +1,340 @@
-# Realtime Multilingual Voice AI Agent (Clinical Appointment Booking)
+# Voice AI Clinic Backend
 
-Production-style FastAPI backend for a real-time voice AI assistant that:
+A scalable AI-powered backend server for handling real-time voice communication, WebSocket streaming, AI assistant responses, appointment management, and multilingual support for the Voice AI Clinic application.
 
-- Receives live microphone audio over WebSocket
-- Streams audio to Deepgram realtime STT (`flux-general-en`)
-- Detects `en`, `hi`, `ta`
-- Uses SambaNova LLM (`Meta-Llama-3.3-70B-Instruct`) with real tool-calling
-- Books/cancels/reschedules appointments in PostgreSQL (Supabase)
-- Stores session memory in Redis Cloud with TTL
-- Converts assistant responses to speech (Deepgram TTS)
-- Returns synthesized audio through WebSocket
-- Logs stage-by-stage latency
+---
 
-## 1. Project Overview
+# 🌐 Backend Overview
 
-This backend is designed for low-latency clinical voice interactions and supports persistent scheduling workflows with tool-based reasoning rather than static chatbot responses.
+This backend handles:
 
-## 2. Architecture Diagram Explanation
+* 🎤 Real-time voice streaming
+* 🤖 AI assistant processing
+* 🔊 Audio chunk handling
+* 📡 WebSocket communication
+* 📅 Appointment booking logic
+* 🌍 Multi-language support
+* 🧠 Session memory management
+* ⚡ Low-latency communication
+* 🔁 Automatic reconnect handling
 
-Flow:
+---
 
-1. Frontend mic audio chunks -> `/ws/audio`
-2. Backend -> Deepgram realtime STT stream
-3. Transcript -> language detection (`en|hi|ta`)
-4. Transcript + context -> SambaNova LLM
-5. LLM decides and calls tools
-6. Tool layer -> async PostgreSQL CRUD
-7. Session state/messages -> Redis memory
-8. Assistant text -> Deepgram TTS
-9. Audio response -> WebSocket (base64 MP3)
-10. Latency metrics logged per turn
+# 🚀 Features
 
-## 3. Folder Structure
+* Real-time WebSocket Server
+* AI Voice Response System
+* Appointment Booking APIs
+* Session Tracking
+* Multi-language Detection
+* Audio Streaming
+* Backend Latency Monitoring
+* Live AI Response Generation
+* Automatic Reconnection Support
+* REST API + WebSocket Hybrid Architecture
 
-```text
-voice-ai-agent/
-├── backend/
-│   ├── __init__.py
-│   ├── agent/
-│   │   ├── __init__.py
-│   │   └── orchestrator.py
+---
+
+# 🛠 Backend Tech Stack
+
+## Core Technologies
+
+* Node.js
+* Express.js
+* WebSocket
+* TypeScript
+* Render Deployment
+* AI API Integration
+* REST APIs
+
+---
+
+# 📁 Backend Project Structure
+
+backend/
+│
+├── src/
 │   ├── api/
-│   │   ├── __init__.py
-│   │   └── routes.py
-│   ├── config/
-│   │   ├── __init__.py
-│   │   └── settings.py
-│   ├── database/
-│   │   ├── __init__.py
-│   │   ├── db.py
-│   │   └── models.py
-│   ├── latency/
-│   │   ├── __init__.py
-│   │   └── logger.py
-│   ├── memory/
-│   │   ├── __init__.py
-│   │   └── redis_memory.py
-│   ├── models/
-│   │   └── __init__.py
-│   ├── schemas/
-│   │   ├── __init__.py
-│   │   └── appointment_schema.py
+│   ├── websocket/
 │   ├── services/
-│   │   ├── __init__.py
-│   │   ├── language/
-│   │   │   ├── __init__.py
-│   │   │   └── detect_language.py
-│   │   ├── llm/
-│   │   │   ├── __init__.py
-│   │   │   └── sambanova_service.py
-│   │   ├── stt/
-│   │   │   ├── __init__.py
-│   │   │   └── deepgram_service.py
-│   │   └── tts/
-│   │       ├── __init__.py
-│   │       └── deepgram_tts.py
-│   ├── tools/
-│   │   ├── __init__.py
-│   │   └── appointment_tools.py
+│   ├── routes/
+│   ├── controllers/
+│   ├── middleware/
 │   ├── utils/
-│   │   └── __init__.py
-│   └── websocket/
-│       ├── __init__.py
-│       └── socket.py
-├── docker/
-├── docs/
-│   └── ARCHITECTURE.md
-├── migrations/
-│   ├── env.py
-│   ├── script.py.mako
-│   └── versions/
-│       └── 20260520_0001_create_core_tables.py
-├── tests/
-│   ├── __init__.py
-│   └── test_health.py
-├── .env.example
-├── alembic.ini
-├── docker-compose.yml
-├── Dockerfile
-├── main.py
+│   ├── config/
+│   ├── app.ts
+│   └── server.ts
+│
+├── package.json
+├── tsconfig.json
+├── .env
 ├── README.md
-└── requirements.txt
-```
+└── render.yaml
 
-## 4. Environment Variables
+---
 
-Required (your exact keys):
+# ⚙️ Installation
 
-- `SAMBANOVA_API_KEY`
-- `DEEPGRAM_API_KEY`
-- `REDIS_URL`
-- `DATABASE_URL`
+## 1️⃣ Clone Repository
 
-Optional:
+git clone https://github.com/your-backend-repository.git
 
-- `APP_ENV`, `APP_HOST`, `APP_PORT`, `LOG_LEVEL`
-- `SAMBANOVA_BASE_URL`, `SAMBANOVA_MODEL`
-- `DEEPGRAM_STT_MODEL`, `DEEPGRAM_TTS_MODEL`
-- `AUDIO_ENCODING`, `AUDIO_SAMPLE_RATE`
-- `REDIS_TTL_SECONDS`, `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `SQL_ECHO`
-- `CORS_ORIGINS`
+---
 
-## 5. Installation Steps
+## 2️⃣ Move Into Backend Folder
 
-1. Copy `.env.example` to `.env`
-2. Fill real secrets
-3. Install Python dependencies
-4. Run DB migration
-5. Start server
+cd backend
 
-## 6. Running Locally
+---
 
-```bash
-python -m venv .venv
-```
+## 3️⃣ Install Dependencies
 
-Windows PowerShell:
+npm install
 
-```bash
-.venv\Scripts\Activate.ps1
-pip install --upgrade pip
-pip install -r requirements.txt
-copy .env.example .env
-alembic upgrade head
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
+---
 
-macOS/Linux:
+# ▶️ Run Development Server
 
-```bash
-source .venv/bin/activate
-pip install --upgrade pip
-pip install -r requirements.txt
-cp .env.example .env
-alembic upgrade head
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
+npm run dev
 
-## 7. Running with Docker
+Backend runs on:
 
-```bash
-docker compose up --build
-```
+http://localhost:3000
 
-API:
+---
 
-- [http://localhost:8000](http://localhost:8000)
-- [http://localhost:8000/docs](http://localhost:8000/docs)
+# 🏗 Production Build
 
-## 8. Render Deployment
+npm run build
 
-1. Push this folder to GitHub.
-2. Create a new **Web Service** in Render.
-3. Runtime: Docker.
-4. Root Directory: `voice-ai-agent`.
-5. Add environment variables in Render dashboard:
-   - `SAMBANOVA_API_KEY`
-   - `DEEPGRAM_API_KEY`
-   - `REDIS_URL`
-   - `DATABASE_URL`
-6. Set health check path: `/api/v1/health`.
-7. Deploy.
+---
 
-If using Supabase + Redis Cloud, do not attach local postgres/redis services on Render.
+# 🚀 Start Production Server
 
-## 9. Supabase Setup
+npm start
 
-1. Create Supabase project.
-2. Copy connection string.
-3. Use async SQLAlchemy format:
+---
 
-```text
-postgresql+asyncpg://USER:PASSWORD@HOST:5432/postgres
-```
+# 🔐 Environment Variables
 
-4. Set as `DATABASE_URL`.
-5. Run:
+Create a file named:
 
-```bash
-alembic upgrade head
-```
+.env
 
-## 10. Redis Cloud Setup
+Example:
 
-1. Create Redis Cloud database.
-2. Copy Redis URI.
-3. Set `REDIS_URL`.
-4. Memory keys are TTL-managed (`REDIS_TTL_SECONDS`).
+PORT=3000
 
-## 11. Deepgram Setup
+OPENROUTER_API_KEY=your_api_key
 
-1. Create Deepgram API key.
-2. Set `DEEPGRAM_API_KEY`.
-3. Realtime STT uses:
-   - `DeepgramClient`
-   - `EventType`
-   - `client.listen.v2.connect()`
-   - model `flux-general-en`
+WEBSOCKET_URL=wss://your-websocket-url.com
 
-## 12. SambaNova Setup
+FRONTEND_URL=https://voice2727.netlify.app
 
-1. Generate SambaNova API key.
-2. Set `SAMBANOVA_API_KEY`.
-3. Client config:
-   - base URL: `https://api.sambanova.ai/v1`
-   - model: `Meta-Llama-3.3-70B-Instruct`
-4. Tool calling is enabled with concrete appointment functions.
+NODE_ENV=production
 
-## 13. WebSocket Testing
+---
 
-Endpoint:
+# 📜 Important Scripts
 
-```text
-ws://localhost:8000/ws/audio
-```
+## Development
 
-Use `wscat` quick test (text/control path):
+"dev": "nodemon src/server.ts"
 
-```bash
-npm install -g wscat
-wscat -c ws://localhost:8000/ws/audio
-```
+## Production Build
 
-Example control packet:
+"build": "tsc"
 
-```json
-{"type":"ping"}
-```
+## Production Start
 
-For audio testing, send binary PCM chunks (`linear16`, 16kHz) from your frontend app.
+"start": "node dist/server.js"
 
-## 14. API Endpoints
+---
 
-- `GET /` -> root service check
-- `GET /api/v1/health` -> health
-- `POST /api/v1/appointments/check` -> availability
-- `POST /api/v1/appointments/book` -> book
-- `POST /api/v1/appointments/cancel` -> cancel
-- `POST /api/v1/appointments/reschedule` -> reschedule
-- `WS /ws/audio` -> realtime voice pipeline
+# 🌍 API Endpoints
 
-## 15. Future Improvements
+## Health Check
 
-1. Add OpenTelemetry traces and Prometheus metrics.
-2. Replace simple language heuristics with robust multilingual ID model.
-3. Add authenticated patient identity and RBAC.
-4. Add doctor timezone-aware scheduling templates and recurrence rules.
-5. Add queue-backed async workers for burst handling.
-6. Add integration tests for websocket audio streaming.
+GET /health
 
+---
+
+## Appointment API
+
+POST /api/appointments
+
+GET /api/appointments
+
+---
+
+## Session API
+
+GET /api/session
+
+POST /api/session
+
+---
+
+# 🔌 WebSocket Features
+
+* Live audio chunk streaming
+* Real-time AI responses
+* User transcript streaming
+* AI assistant audio responses
+* Session synchronization
+* Voice phase handling
+
+---
+
+# ☁️ Render Deployment Settings
+
+## Build Command
+
+npm install && npm run build
+
+## Start Command
+
+npm start
+
+## Environment
+
+Node
+
+## Node Version
+
+20.x
+
+---
+
+# 🔧 Render Environment Variables
+
+Add in Render Dashboard:
+
+PORT
+
+OPENROUTER_API_KEY
+
+FRONTEND_URL
+
+NODE_ENV
+
+WEBSOCKET_URL
+
+---
+
+# 🔒 CORS Configuration
+
+Example:
+
+app.use(cors({
+origin: "https://voice2727.netlify.app",
+credentials: true
+}));
+
+---
+
+# 🌐 Frontend Connection Example
+
+Frontend WebSocket Connection:
+
+const socket = new WebSocket("wss://your-backend-url.com");
+
+---
+
+# 📡 Backend Deployment URL
+
+Example:
+
+https://your-backend.onrender.com
+
+---
+
+# 📤 GitHub Push Commands
+
+git add .
+
+git commit -m "backend deployment update"
+
+git push origin main
+
+---
+
+# 🐞 Common Issues & Fixes
+
+## WebSocket Connection Failed
+
+Check:
+
+* backend URL
+* CORS settings
+* HTTPS/WSS protocol
+* Render deployment status
+
+---
+
+## CORS Error
+
+Fix:
+
+app.use(cors({
+origin: "https://voice2727.netlify.app",
+credentials: true
+}));
+
+---
+
+## Render Build Failed
+
+Run locally:
+
+npm install
+
+npm run build
+
+---
+
+## Environment Variable Missing
+
+Check:
+
+* Render Dashboard
+* .env file
+* variable spelling
+
+---
+
+# 🔐 Security Improvements
+
+* Helmet.js
+* Rate Limiting
+* Environment Variable Protection
+* HTTPS/WSS Encryption
+* Secure API Key Storage
+
+---
+
+# 👨‍💻 Author
+
+## Vishwa Jaganathan
+
+* Final Year Mechatronics Engineering Student
+* Full Stack Developer
+* AI + Voice Application Developer
+
+---
+
+# 🔮 Future Improvements
+
+* AI Symptom Detection
+* Voice Authentication
+* Prescription Generator
+* Video Consultation
+* Patient History Tracking
+* Firebase Notifications
+* AI Medical Suggestions
+
+---
+
+# 📜 License
+
+This project is for educational and development purposes.
