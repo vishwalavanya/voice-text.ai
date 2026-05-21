@@ -108,7 +108,7 @@ class VoiceAgentOrchestrator:
         transcript_lower = transcript.lower().strip()
 
         # ---------------------------------------------------
-        # RESET BOOKING FLOW
+        # NEW BOOKING RESET
         # ---------------------------------------------------
 
         new_booking_phrases = [
@@ -121,13 +121,12 @@ class VoiceAgentOrchestrator:
             "appointment booking",
 
             # Tamil
-            "அப்பாயின்மென்ட்",
-            "appointment புக்",
+            "அப்பாயின்மென்ட் புக்",
+            "புதிய அப்பாயின்மென்ட்",
 
             # Hindi
-            "अपॉइंटमेंट",
-            "डॉक्टर अपॉइंटमेंट",
-            "बुकिंग",
+            "अपॉइंटमेंट बुक",
+            "नई अपॉइंटमेंट",
         ]
 
         is_new_booking = any(
@@ -135,19 +134,29 @@ class VoiceAgentOrchestrator:
             for phrase in new_booking_phrases
         )
 
-        # CRITICAL FIX: Reset booking_state ONLY when new booking is detected
         if is_new_booking:
+
+            # FULL SESSION RESET
+            await self.memory_store.clear_session(
+                session_id
+            )
+
             booking_state = {}
+
+            state = {}
+
             await self.memory_store.update_state_fields(
                 session_id,
                 {
                     "booking_state": {},
                     "current_intent": "book_appointment",
                     "temporary_context": {},
+                    "language_preference": preferred_language,
                 },
             )
+
         else:
-            # Load existing booking state if NOT a new booking
+
             booking_state = state.get(
                 "booking_state",
                 {},
@@ -165,7 +174,7 @@ class VoiceAgentOrchestrator:
         )
 
         # ---------------------------------------------------
-        # MULTILINGUAL DOCTOR KEYWORDS
+        # DOCTOR DETECTION
         # ---------------------------------------------------
 
         doctor_keywords = {
@@ -234,15 +243,14 @@ class VoiceAgentOrchestrator:
 
         detected_doctor = None
 
-        # CRITICAL FIX: Check for doctor keywords in current transcript
         for keyword, doctor in doctor_keywords.items():
+
             if keyword in transcript_lower:
                 detected_doctor = doctor
                 break
 
-        # CRITICAL FIX: Only set doctor_name if detected in CURRENT transcript
-        # Do NOT carry over from previous state unless explicitly in new booking flow
         if detected_doctor:
+
             booking_state["doctor_name"] = detected_doctor
 
         # ---------------------------------------------------
@@ -367,7 +375,7 @@ class VoiceAgentOrchestrator:
 
         if is_booking_flow:
 
-            # ASK DOCTOR (FIRST PRIORITY - ALWAYS ASK IF MISSING)
+            # ASK DOCTOR
 
             if not booking_state.get("doctor_name"):
 
@@ -399,7 +407,7 @@ class VoiceAgentOrchestrator:
                     "intent": "collect_doctor",
                 }
 
-            # ASK DATE (SECOND PRIORITY)
+            # ASK DATE
 
             if not booking_state.get("appointment_date"):
 
@@ -431,7 +439,7 @@ class VoiceAgentOrchestrator:
                     "intent": "collect_date",
                 }
 
-            # ASK TIME (THIRD PRIORITY)
+            # ASK TIME
 
             if not booking_state.get("appointment_time"):
 
